@@ -1,0 +1,47 @@
+server:
+  port: ${BUSINESS_API_PORT:8082}
+  shutdown: graceful
+  error:
+    include-binding-errors: never
+    include-exception: false
+    include-message: never
+    include-stacktrace: never
+
+spring:
+  application:
+    name: entra-business-api
+  profiles:
+    default: entra
+  main:
+    banner-mode: off
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+app:
+  security:
+    required-scope: access_as_user
+    allowed-origins:
+      - "${UI_ORIGIN:http://localhost:5173}"
+    # Backend authorization policy. Each key is checked by a @CanView* annotation in this API.
+    # Values must match Entra app-role values exactly; the ROLE_ prefix is added internally.
+    endpoint-roles:
+      dashboard:
+        - APP_USER
+        - APP_MANAGER
+        - APP_ADMIN
+      reports:
+        - APP_MANAGER
+        - APP_ADMIN
+      admin-users:
+        - APP_ADMIN
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never

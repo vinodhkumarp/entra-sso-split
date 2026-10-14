@@ -1,0 +1,148 @@
+package com.example.entrasso.sso;
+
+import com.example.entrasso.sso.error.ApiErrorController;
+import com.example.entrasso.sso.error.GlobalApiExceptionHandler;
+import com.example.entrasso.sso.logging.CorrelationIdFilter;
+import com.example.entrasso.sso.security.ApiSecurityErrorHandler;
+import com.example.entrasso.sso.security.CurrentUserService;
+import com.example.entrasso.sso.security.EntraSecurityProperties;
+import com.example.entrasso.sso.security.RoleAuthorizationService;
+import com.example.entrasso.sso.security.RoleFunctionalityService;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+/** Configures an application as a stateless Microsoft Entra JWT resource server. */
+@Configuration(proxyBeanMethods = false)
+@EnableMethodSecurity
+@EnableConfigurationProperties(EntraSecurityProperties.class)
+@Import({
+  ApiSecurityErrorHandler.class,
+  RoleAuthorizationService.class,
+  RoleFunctionalityService.class,
+  CurrentUserService.class,
+  CorrelationIdFilter.class,
+  GlobalApiExceptionHandler.class,
+  ApiErrorController.class
+})
+public class EntraSsoConfiguration {
+
+  /**
+   * Creates the filter chain that validates bearer tokens before protected controllers execute.
+   *
+   * <p>Spring Boot creates the {@code JwtDecoder} from the configured issuer and audience. That
+   * decoder validates the JWT signature, issuer, audience, expiry, and not-before time.
+   */
+  @Bean
+  SecurityFilterChain entraSecurityFilterChain(
+      HttpSecurity http,
+      EntraSecurityProperties properties,
+      ApiSecurityErrorHandler apiSecurityErrorHandler,
+      JwtAuthenticationConverter jwtAuthenticationConverter,
+      @Qualifier("entraCorsConfigurationSource") CorsConfigurationSource corsConfigurationSource)
+      throws Exception {
+    http.cors(cors -> cors.configurationSource(corsConfigurationSource))
+        .csrf(AbstractHttpConfigurer::disable)
+        .formLogin(AbstractHttpConfigurer::disable)
+        .logout(AbstractHttpConfigurer::disable)
+        .requestCache(AbstractHttpConfigurer::disable)
+        .sessionManagement(
+            session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+        .exceptionHandling(
+            exceptions ->
+                exceptions
+                    .authenticationEntryPoint(apiSecurityErrorHandler)
+                    .accessDeniedHandler(apiSecurityErrorHandler))
+        .authorizeHttpRequests(
+            authorize ->
+                authorize
+                    .requestMatchers(HttpMethod.OPTIONS, "/**")
+                    .permitAll()
+                    .requestMatchers("/actuator/health", "/actuator/health/**", "/error")
+                    .permitAll()
+                    .requestMatchers("/api/**")
+                    .hasAuthority("SCOPE_" + properties.requiredScope())
+                    .anyRequest()
+                    .denyAll())
+        .oauth2ResourceServer(
+            resourceServer ->
+                resourceServer
+                    .authenticationEntryPoint(apiSecurityErrorHandler)
+                    .accessDeniedHandler(apiSecurityErrorHandler)
+                    .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter)));
+    return http.build();
+  }
+
+  /** Converts Entra's space-delimited {@code scp} and array-valued {@code roles} claims. */
+  @Bean
+  JwtAuthenticationConverter entraJwtAuthenticationConverter() {
+    JwtGrantedAuthoritiesConverter scopes = new JwtGrantedAuthoritiesConverter();
+    scopes.setAuthoritiesClaimName("scp");
+    scopes.setAuthorityPrefix("SCOPE_");
+
+    JwtGrantedAuthoritiesConverter roles = new JwtGrantedAuthoritiesConverter();
+    roles.setAuthoritiesClaimName("roles");
+    roles.setAuthorityPrefix("ROLE_");
+
+    JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+    converter.setPrincipalClaimName("oid");
+    converter.setJwtGrantedAuthoritiesConverter(jwt -> combine(jwt, scopes, roles));
+    return converter;
+  }
+
+  /** Creates the exact browser-origin allow-list used by Spring Security CORS processing. */
+  @Bean
+  CorsConfigurationSource entraCorsConfigurationSource(EntraSecurityProperties properties) {
+    CorsConfiguration configuration = new CorsConfiguration();
+    configuration.setAllowedOrigins(properties.allowedOrigins());
+    configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+    configuration.setAllowedHeaders(
+        List.of(
+            "Authorization",
+            "Content-Type",
+            CorrelationIdFilter.HEADER_NAME,
+            CorrelationIdFilter.TRACEPARENT_HEADER));
+    configuration.setExposedHeaders(List.of("WWW-Authenticate", CorrelationIdFilter.HEADER_NAME));
+    configuration.setAllowCredentials(false);
+    configuration.setMaxAge(3600L);
+
+    UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+    source.registerCorsConfiguration("/**", configuration);
+    return source;
+  }
+
+  /** Combines optional scope and role converter output into one immutable authority collection. */
+  private static Collection<GrantedAuthority> combine(
+      Jwt jwt, JwtGrantedAuthoritiesConverter scopes, JwtGrantedAuthoritiesConverter roles) {
+    List<GrantedAuthority> authorities = new ArrayList<>();
+    addIfPresent(authorities, scopes.convert(jwt));
+    addIfPresent(authorities, roles.convert(jwt));
+    return List.copyOf(authorities);
+  }
+
+  /** Adds converter output only when its token claim is present. */
+  private static void addIfPresent(
+      Collection<GrantedAuthority> destination, Collection<GrantedAuthority> source) {
+    if (source != null) {
+      destination.addAll(source);
+    }
+  }
+}

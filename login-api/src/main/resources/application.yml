@@ -1,0 +1,48 @@
+server:
+  port: ${LOGIN_API_PORT:8081}
+  shutdown: graceful
+  error:
+    include-binding-errors: never
+    include-exception: false
+    include-message: never
+    include-stacktrace: never
+
+spring:
+  application:
+    name: entra-login-api
+  profiles:
+    default: entra
+  main:
+    banner-mode: off
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+app:
+  security:
+    required-scope: access_as_user
+    allowed-origins:
+      - "${UI_ORIGIN:http://localhost:5173}"
+    # The login API protects no business endpoints, so no endpoint-roles are declared here.
+    # UI-only functionality metadata returned by POST /api/login. Keys must match Entra app-role
+    # values exactly.
+    role-functionalities:
+      APP_USER:
+        - DASHBOARD_VIEW
+      APP_MANAGER:
+        - DASHBOARD_VIEW
+        - REPORTS_VIEW
+      APP_ADMIN:
+        - DASHBOARD_VIEW
+        - REPORTS_VIEW
+        - ADMIN_USERS_VIEW
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never

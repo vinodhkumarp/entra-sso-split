@@ -1,0 +1,208 @@
+openapi: 3.0.3
+info:
+  title: Entra SSO Login API
+  version: 1.0.0
+  description: >-
+    Login component. Microsoft Entra issues the access token; this API validates it (through the
+    shared SSO library) and returns the caller's identity, application roles and UI functionality.
+servers:
+  - url: http://localhost:8081
+    description: Local development
+tags:
+  - name: Auth
+    description: Login and role discovery
+security:
+  - entraOAuth2:
+      - access_as_user
+paths:
+  /api/login:
+    post:
+      tags:
+        - Auth
+      operationId: login
+      summary: Log in and return the caller's roles
+      description: >-
+        Validates the bearer token (signature, issuer, audience, expiry and the required scope) and
+        returns the identity, application roles and UI functionality derived from it. This operation
+        does not issue a token; the SPA obtains the token from Microsoft Entra.
+      responses:
+        "200":
+          description: Login succeeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedProblem"
+        "403":
+          $ref: "#/components/responses/ForbiddenProblem"
+        default:
+          $ref: "#/components/responses/ApiProblem"
+components:
+  securitySchemes:
+    entraOAuth2:
+      type: oauth2
+      description: Microsoft Entra authorization code flow with PKCE for the React SPA.
+      flows:
+        authorizationCode:
+          authorizationUrl: https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/authorize
+          tokenUrl: https://login.microsoftonline.com/{tenant-id}/oauth2/v2.0/token
+          scopes:
+            access_as_user: Call the API on behalf of the signed-in user
+  responses:
+    UnauthorizedProblem:
+      description: A valid bearer access token is required.
+      headers:
+        X-Correlation-Id:
+          $ref: "#/components/headers/CorrelationId"
+        WWW-Authenticate:
+          description: Standards-compliant OAuth 2.0 bearer authentication challenge.
+          schema:
+            type: string
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ApiProblem"
+    ForbiddenProblem:
+      description: The token lacks the required delegated scope or application role.
+      headers:
+        X-Correlation-Id:
+          $ref: "#/components/headers/CorrelationId"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ApiProblem"
+    ApiProblem:
+      description: A custom client, server, database, or downstream error response.
+      headers:
+        X-Correlation-Id:
+          $ref: "#/components/headers/CorrelationId"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ApiProblem"
+  headers:
+    CorrelationId:
+      description: Request correlation ID generated or accepted by the backend.
+      schema:
+        type: string
+  schemas:
+    ApiProblem:
+      type: object
+      additionalProperties: false
+      description: >-
+        Safe RFC 9457-style error response. Internal exception messages, stack traces, SQL,
+        credentials, access tokens, and downstream response bodies are never included.
+      required:
+        - type
+        - title
+        - status
+        - detail
+        - instance
+        - code
+        - correlationId
+        - timestamp
+      properties:
+        type:
+          type: string
+          format: uri
+          description: Stable URI identifying the error category.
+          example: urn:problem:entra-sso:access-denied
+        title:
+          type: string
+          description: Short client-facing error category.
+          example: Access denied
+        status:
+          type: integer
+          format: int32
+          minimum: 400
+          maximum: 599
+          description: HTTP response status.
+          example: 403
+        detail:
+          type: string
+          description: Safe explanation suitable for display or diagnostics.
+          example: The authenticated user does not have permission for this operation.
+        instance:
+          type: string
+          description: Request path associated with this occurrence.
+          example: /api/admin/users
+        code:
+          type: string
+          description: Stable application code intended for client-side decisions.
+          example: ACCESS_DENIED
+        correlationId:
+          type: string
+          description: Value matching the X-Correlation-Id response header and backend logs.
+          example: 9f3bf7b9-e0dc-4f88-87dd-b252c3fcb0a2
+        timestamp:
+          type: string
+          format: date-time
+          description: UTC time when the error response was created.
+        violations:
+          type: array
+          description: Present only when individual request values fail validation.
+          items:
+            $ref: "#/components/schemas/ApiValidationViolation"
+    ApiValidationViolation:
+      type: object
+      additionalProperties: false
+      required:
+        - field
+        - message
+      properties:
+        field:
+          type: string
+          description: Request field, parameter, or validation path.
+          example: reportId
+        message:
+          type: string
+          description: Client-safe validation message that excludes the rejected value.
+          example: must not be blank
+    LoginResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - subjectId
+        - username
+        - displayName
+        - tenantId
+        - roles
+        - functionalities
+        - tokenExpiresAt
+      properties:
+        subjectId:
+          type: string
+          description: Stable user object identifier from the validated token.
+          example: 8db1f852-9f10-4e29-b1ab-0b819fcb5d3f
+        username:
+          type: string
+          description: Preferred username, UPN, or token subject fallback.
+          example: manager@example.onmicrosoft.com
+        displayName:
+          type: string
+          description: Display name or username fallback.
+          example: Example Manager
+        tenantId:
+          type: string
+          description: Microsoft Entra tenant identifier.
+          example: 2a61e214-d27a-46f2-b24f-09173719c748
+        roles:
+          type: array
+          description: Sorted application roles from the validated roles claim.
+          items:
+            type: string
+          example:
+            - APP_MANAGER
+        functionalities:
+          type: array
+          description: Sorted UI functionality hints resolved by the backend.
+          items:
+            type: string
+          example:
+            - DASHBOARD_VIEW
+            - REPORTS_VIEW
+        tokenExpiresAt:
+          type: string
+          format: date-time
+          description: Expiration time from the validated access token.
